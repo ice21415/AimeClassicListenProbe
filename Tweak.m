@@ -141,7 +141,8 @@ static uintptr_t setCEConfigProc(uintptr_t context, uintptr_t status) {
 static id hostCardEmulationConfig(id cls, SEL selector, BOOL fieldDetect) {
     id config = originalHostCardEmulationConfig(cls, selector, fieldDetect);
     if (!config || access(kFelicaGate, F_OK) != 0) return config;
-    uint8_t *bytes = (__bridge uint8_t *)config;
+    void *opaque = (__bridge void *)config;
+    uint8_t *bytes = opaque;
     int32_t cardType = 0;
     uint64_t hostMode = 0, embeddedMode = 0;
     memcpy(&cardType, bytes + 0x10, sizeof(cardType));
