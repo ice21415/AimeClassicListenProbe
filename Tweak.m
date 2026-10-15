@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
+#include <objc/runtime.h>
 #include <ptrauth.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,7 @@ static uintptr_t (*originalActivationParser)(uintptr_t, uintptr_t, uintptr_t);
 static uintptr_t (*originalProtoIfMapRsp)(uintptr_t);
 static uintptr_t (*originalSetCEConfig)(uintptr_t, const uint8_t *, uintptr_t, uintptr_t);
 static uintptr_t (*originalSetCEConfigProc)(uintptr_t, uintptr_t);
+static id (*originalHostCardEmulationConfig)(id, SEL, BOOL);
 
 static void record(const char *event, unsigned long value) {
     int fd = open("/var/tmp/aime-classic-listen-probe.log",
@@ -136,6 +138,26 @@ static uintptr_t setCEConfigProc(uintptr_t context, uintptr_t status) {
     return originalSetCEConfigProc(context, status);
 }
 
+static id hostCardEmulationConfig(id cls, SEL selector, BOOL fieldDetect) {
+    id config = originalHostCardEmulationConfig(cls, selector, fieldDetect);
+    if (!config || access(kFelicaGate, F_OK) != 0) return config;
+    uint8_t *bytes = (uint8_t *)(void *)config;
+    int32_t cardType = 0;
+    uint64_t hostMode = 0, embeddedMode = 0;
+    memcpy(&cardType, bytes + 0x10, sizeof(cardType));
+    memcpy(&hostMode, bytes + 0x20, sizeof(hostMode));
+    memcpy(&embeddedMode, bytes + 0x28, sizeof(embeddedMode));
+    record("routing_original_card_type", (unsigned long)cardType);
+    record("routing_original_host_mode", (unsigned long)hostMode);
+    record("routing_original_embedded_mode", (unsigned long)embeddedMode);
+    if (cardType == 3 && hostMode == 2 && embeddedMode == 0) {
+        const int32_t felicaCardType = 4;
+        memcpy(bytes + 0x10, &felicaCardType, sizeof(felicaCardType));
+        record("routing_card_type_3_to_4", felicaCardType);
+    }
+    return config;
+}
+
 __attribute__((constructor)) static void start(void) {
     @autoreleasepool {
         BOOL classicEnabled = access(kGate, F_OK) == 0;
@@ -166,10 +188,15 @@ __attribute__((constructor)) static void start(void) {
             if (setCE) MSHookFunction(ptrauth_strip(setCE, ptrauth_key_function_pointer),
                                       (void *)setCEConfig, (void **)&originalSetCEConfig);
             MSHookFunction(ceConfigProc, (void *)setCEConfigProc, (void **)&originalSetCEConfigProc);
+            Class routingClass = objc_getClass("NFRoutingConfig");
+            Method routingFactory = routingClass ? class_getClassMethod(routingClass,
+                sel_registerName("hostCardEmulationWithFieldDetect:")) : NULL;
+            if (routingFactory) MSHookFunction((void *)method_getImplementation(routingFactory),
+                (void *)hostCardEmulationConfig, (void **)&originalHostCardEmulationConfig);
         }
         BOOL ok = originalActivationParser &&
             (!classicEnabled || (originalConfigMapping && originalConfigSequence && originalProtoIfMapRsp)) &&
-            (!felicaEnabled || (originalSetCEConfig && originalSetCEConfigProc));
+            (!felicaEnabled || (originalSetCEConfig && originalSetCEConfigProc && originalHostCardEmulationConfig));
         record(ok ? "hooks_installed" : "hook_failed", (unsigned long)target);
     }
 }
