@@ -16,6 +16,7 @@ static const char *kGate = "/var/tmp/aime-classic-listen-probe.enabled";
 static uintptr_t (*originalConfigMapping)(uintptr_t, uint32_t, const AimeDiscMapEntry *, uintptr_t, uintptr_t);
 static uintptr_t (*originalConfigSequence)(uintptr_t, uintptr_t, uintptr_t);
 static uintptr_t (*originalActivationParser)(uintptr_t, uintptr_t, uintptr_t);
+static uintptr_t (*originalProtoIfMapRsp)(uintptr_t);
 
 static void record(const char *event, unsigned long value) {
     int fd = open("/var/tmp/aime-classic-listen-probe.log",
@@ -67,6 +68,12 @@ static uintptr_t configSequence(uintptr_t context, uintptr_t response, uintptr_t
     return originalConfigSequence(context, response, status);
 }
 
+static uintptr_t protoIfMapRsp(uintptr_t context) {
+    uintptr_t result = originalProtoIfMapRsp(context);
+    record("proto_if_map_result", result);
+    return result;
+}
+
 static uintptr_t activationParser(uintptr_t context, uintptr_t output, uintptr_t raw) {
     if (raw) {
         uint32_t interface = 0, technologyMode = 0, protocol = 0, discoveryMode = 0;
@@ -97,12 +104,14 @@ __attribute__((constructor)) static void start(void) {
         }
         void *entry = ptrauth_strip(exported, ptrauth_key_function_pointer);
         void *target = (uint8_t *)entry + 0x408d0;
-        void *sequence = (uint8_t *)entry + 0x395ac;
+        void *sequence = (uint8_t *)entry + 0x394ac;
+        void *mappingResponse = (uint8_t *)entry + 0x389d0;
         void *activation = (uint8_t *)entry + 0x1e214;
         MSHookFunction(activation, (void *)activationParser, (void **)&originalActivationParser);
+        MSHookFunction(mappingResponse, (void *)protoIfMapRsp, (void **)&originalProtoIfMapRsp);
         MSHookFunction(sequence, (void *)configSequence, (void **)&originalConfigSequence);
         MSHookFunction(target, (void *)configMapping, (void **)&originalConfigMapping);
-        record(originalConfigMapping && originalConfigSequence && originalActivationParser ? "hooks_installed" : "hook_failed",
+        record(originalConfigMapping && originalConfigSequence && originalActivationParser && originalProtoIfMapRsp ? "hooks_installed" : "hook_failed",
                (unsigned long)target);
     }
 }
