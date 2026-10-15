@@ -1,6 +1,6 @@
 Package: io.github.ice21415.aimeclassiclistenprobe
 Name: Aime Classic Listen Probe
-Version: 0.3.3
+Version: 0.3.4
 Architecture: iphoneos-arm
 Description: Opt-in nfcd probe for the SN200 MIFARE Classic discovery-map role.
 Maintainer: ice21415

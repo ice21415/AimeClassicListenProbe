@@ -22,6 +22,8 @@ static uintptr_t (*originalProtoIfMapRsp)(uintptr_t);
 static uintptr_t (*originalSetCEConfig)(uintptr_t, const uint8_t *, uintptr_t, uintptr_t);
 static uintptr_t (*originalSetCEConfigProc)(uintptr_t, uintptr_t);
 static id (*originalHostCardEmulationConfig)(id, SEL, BOOL);
+static id (*originalInitialRoutingConfig)(id, SEL);
+static id (*originalInitialRoutingConfigWithField)(id, SEL, id);
 
 static void record(const char *event, unsigned long value) {
     int fd = open("/var/tmp/aime-classic-listen-probe.log",
@@ -138,8 +140,7 @@ static uintptr_t setCEConfigProc(uintptr_t context, uintptr_t status) {
     return originalSetCEConfigProc(context, status);
 }
 
-static id hostCardEmulationConfig(id cls, SEL selector, BOOL fieldDetect) {
-    id config = originalHostCardEmulationConfig(cls, selector, fieldDetect);
+static id patchRoutingConfig(id config, const char *source) {
     if (!config || access(kFelicaGate, F_OK) != 0) return config;
     void *opaque = (__bridge void *)config;
     uint8_t *bytes = opaque;
@@ -151,12 +152,28 @@ static id hostCardEmulationConfig(id cls, SEL selector, BOOL fieldDetect) {
     record("routing_original_card_type", (unsigned long)cardType);
     record("routing_original_host_mode", (unsigned long)hostMode);
     record("routing_original_embedded_mode", (unsigned long)embeddedMode);
+    record(source, (unsigned long)cardType);
     if (cardType == 3 && hostMode == 2 && embeddedMode == 0) {
         const int32_t felicaCardType = 4;
         memcpy(bytes + 0x10, &felicaCardType, sizeof(felicaCardType));
         record("routing_card_type_3_to_4", felicaCardType);
     }
     return config;
+}
+
+static id hostCardEmulationConfig(id cls, SEL selector, BOOL fieldDetect) {
+    return patchRoutingConfig(originalHostCardEmulationConfig(cls, selector, fieldDetect),
+                              "routing_factory_seen");
+}
+
+static id initialRoutingConfig(id self, SEL selector) {
+    return patchRoutingConfig(originalInitialRoutingConfig(self, selector),
+                              "routing_session_initial_seen");
+}
+
+static id initialRoutingConfigWithField(id self, SEL selector, id field) {
+    return patchRoutingConfig(originalInitialRoutingConfigWithField(self, selector, field),
+                              "routing_session_field_seen");
 }
 
 __attribute__((constructor)) static void start(void) {
@@ -194,10 +211,20 @@ __attribute__((constructor)) static void start(void) {
                 sel_registerName("hostCardEmulationWithFieldDetect:")) : NULL;
             if (routingFactory) MSHookFunction((void *)method_getImplementation(routingFactory),
                 (void *)hostCardEmulationConfig, (void **)&originalHostCardEmulationConfig);
+            Class sessionClass = objc_getClass("_NFHCESession");
+            Method initial = sessionClass ? class_getInstanceMethod(sessionClass,
+                sel_registerName("initialRoutingConfig")) : NULL;
+            Method withField = sessionClass ? class_getInstanceMethod(sessionClass,
+                sel_registerName("initialRoutingConfigWithField:")) : NULL;
+            if (initial) MSHookFunction((void *)method_getImplementation(initial),
+                (void *)initialRoutingConfig, (void **)&originalInitialRoutingConfig);
+            if (withField) MSHookFunction((void *)method_getImplementation(withField),
+                (void *)initialRoutingConfigWithField, (void **)&originalInitialRoutingConfigWithField);
         }
         BOOL ok = originalActivationParser &&
             (!classicEnabled || (originalConfigMapping && originalConfigSequence && originalProtoIfMapRsp)) &&
-            (!felicaEnabled || (originalSetCEConfig && originalSetCEConfigProc && originalHostCardEmulationConfig));
+            (!felicaEnabled || (originalSetCEConfig && originalSetCEConfigProc && originalHostCardEmulationConfig &&
+                                originalInitialRoutingConfig && originalInitialRoutingConfigWithField));
         record(ok ? "hooks_installed" : "hook_failed", (unsigned long)target);
     }
 }
