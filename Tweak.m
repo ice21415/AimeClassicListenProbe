@@ -69,6 +69,18 @@ static uintptr_t configSequence(uintptr_t context, uintptr_t response, uintptr_t
 }
 
 static uintptr_t protoIfMapRsp(uintptr_t context) {
+    uint32_t length = 0;
+    uintptr_t bytes = 0;
+    if (context) {
+        memcpy(&length, (const void *)(context + 0xd58), sizeof(length));
+        memcpy(&bytes, (const void *)(context + 0xd50), sizeof(bytes));
+    }
+    record("proto_if_map_length", length);
+    if (bytes && length) {
+        uint8_t status = 0xff;
+        memcpy(&status, (const void *)bytes, sizeof(status));
+        record("proto_if_map_status_byte", status);
+    }
     uintptr_t result = originalProtoIfMapRsp(context);
     record("proto_if_map_result", result);
     return result;
