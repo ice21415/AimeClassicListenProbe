@@ -5,6 +5,7 @@
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <objc/runtime.h>
+#include <objc/message.h>
 #include <ptrauth.h>
 #include <stdio.h>
 #include <string.h>
@@ -24,6 +25,7 @@ static uintptr_t (*originalSetCEConfigProc)(uintptr_t, uintptr_t);
 static id (*originalHostCardEmulationConfig)(id, SEL, BOOL);
 static id (*originalInitialRoutingConfig)(id, SEL);
 static id (*originalInitialRoutingConfigWithField)(id, SEL, id);
+static id (*originalSetRoutingConfig)(id, SEL, id);
 
 static void record(const char *event, unsigned long value) {
     int fd = open("/var/tmp/aime-classic-listen-probe.log",
@@ -176,6 +178,27 @@ static id initialRoutingConfigWithField(id self, SEL selector, id field) {
                               "routing_session_field_seen");
 }
 
+static id setRoutingConfig(id self, SEL selector, id config) {
+    if (config && access(kFelicaGate, F_OK) == 0) {
+        uint64_t cardType = ((uint64_t (*)(id, SEL))objc_msgSend)(config,
+            sel_registerName("cardEmulationType"));
+        uint64_t hostMode = ((uint64_t (*)(id, SEL))objc_msgSend)(config,
+            sel_registerName("hostMode"));
+        uint64_t embeddedMode = ((uint64_t (*)(id, SEL))objc_msgSend)(config,
+            sel_registerName("embeddedMode"));
+        record("set_routing_card_type", (unsigned long)cardType);
+        record("set_routing_host_mode", (unsigned long)hostMode);
+        record("set_routing_embedded_mode", (unsigned long)embeddedMode);
+        if (cardType == 3 && hostMode == 2 && embeddedMode == 0) {
+            void *opaque = (__bridge void *)config;
+            const int32_t felicaCardType = 4;
+            memcpy((uint8_t *)opaque + 0x10, &felicaCardType, sizeof(felicaCardType));
+            record("set_routing_card_type_3_to_4", felicaCardType);
+        }
+    }
+    return originalSetRoutingConfig(self, selector, config);
+}
+
 __attribute__((constructor)) static void start(void) {
     @autoreleasepool {
         BOOL classicEnabled = access(kGate, F_OK) == 0;
@@ -220,11 +243,17 @@ __attribute__((constructor)) static void start(void) {
                 (void *)initialRoutingConfig, (void **)&originalInitialRoutingConfig);
             if (withField) MSHookFunction((void *)method_getImplementation(withField),
                 (void *)initialRoutingConfigWithField, (void **)&originalInitialRoutingConfigWithField);
+            Class managerClass = objc_getClass("_NFHardwareManager");
+            Method setRouting = managerClass ? class_getInstanceMethod(managerClass,
+                sel_registerName("setRoutingConfig:")) : NULL;
+            if (setRouting) MSHookFunction((void *)method_getImplementation(setRouting),
+                (void *)setRoutingConfig, (void **)&originalSetRoutingConfig);
         }
         BOOL ok = originalActivationParser &&
             (!classicEnabled || (originalConfigMapping && originalConfigSequence && originalProtoIfMapRsp)) &&
             (!felicaEnabled || (originalSetCEConfig && originalSetCEConfigProc && originalHostCardEmulationConfig &&
                                 originalInitialRoutingConfig && originalInitialRoutingConfigWithField));
+            if (felicaEnabled) ok = ok && originalSetRoutingConfig;
         record(ok ? "hooks_installed" : "hook_failed", (unsigned long)target);
     }
 }
