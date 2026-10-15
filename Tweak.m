@@ -55,7 +55,7 @@ static uintptr_t configMapping(uintptr_t context, uint32_t count,
                                uintptr_t callback, uintptr_t callbackContext) {
     AimeDiscMapEntry patched[2];
     if (access(kGate, F_OK) == 0 && AimePatchClassicListen(count, entries, patched)) {
-        record("classic_mode_1_to_3", count);
+        record("classic_mode_1_to_2", count);
         uintptr_t status = originalConfigMapping(context, count, patched, callback, callbackContext);
         record("config_mapping_return", status);
         return status;

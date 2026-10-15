@@ -17,6 +17,6 @@ static inline int AimePatchClassicListen(uint32_t count,
     };
     if (count != 2 || !source || !output || memcmp(source, expected, sizeof(expected))) return 0;
     memcpy(output, source, sizeof(expected));
-    output[1].mode = 3;
+    output[1].mode = 2;
     return 1;
 }
