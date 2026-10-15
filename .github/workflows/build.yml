@@ -1,0 +1,50 @@
+name: Build Classic Listen probe
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: [rootful, roothide]
+    env:
+      THEOS: ${{ github.workspace }}/.theos-sdk
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: brew install ldid dpkg make
+      - name: Prepare pinned Theos
+        run: |
+          git clone https://github.com/roothide/theos.git "$THEOS"
+          git -C "$THEOS" checkout cfba89a53a05b4a1b822121158acc3669c20602f
+          git -C "$THEOS" submodule update --init --recursive
+      - name: Build package
+        shell: bash
+        run: |
+          set -o pipefail
+          export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
+          scheme="${{ matrix.scheme }}"
+          if [ "$scheme" = rootful ]; then scheme=""; fi
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME="$scheme" 2>&1 | tee build.log
+          mkdir -p artifacts packaged
+          cp packages/*.deb artifacts/
+          dpkg-deb --extract packages/*.deb packaged
+          find packaged -name AimeClassicListenProbe.dylib -exec cp {} artifacts/ \;
+          lipo artifacts/AimeClassicListenProbe.dylib -verify_arch arm64 arm64e
+          cp build.log artifacts/
+          cd artifacts
+          shasum -a 256 *.deb *.dylib > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: AimeClassicListenProbe-${{ matrix.scheme }}
+          path: |
+            artifacts/
+            build.log
+          if-no-files-found: error
