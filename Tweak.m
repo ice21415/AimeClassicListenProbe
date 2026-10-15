@@ -13,10 +13,12 @@
 #include "MappingPatch.h"
 
 static const char *kGate = "/var/tmp/aime-classic-listen-probe.enabled";
+static const char *kFelicaGate = "/var/tmp/aime-felica-host-probe.enabled";
 static uintptr_t (*originalConfigMapping)(uintptr_t, uint32_t, const AimeDiscMapEntry *, uintptr_t, uintptr_t);
 static uintptr_t (*originalConfigSequence)(uintptr_t, uintptr_t, uintptr_t);
 static uintptr_t (*originalActivationParser)(uintptr_t, uintptr_t, uintptr_t);
 static uintptr_t (*originalProtoIfMapRsp)(uintptr_t);
+static uintptr_t (*originalSetCEConfig)(uintptr_t, const uint8_t *, uintptr_t, uintptr_t);
 
 static void record(const char *event, unsigned long value) {
     int fd = open("/var/tmp/aime-classic-listen-probe.log",
@@ -103,9 +105,36 @@ static uintptr_t activationParser(uintptr_t context, uintptr_t output, uintptr_t
     return originalActivationParser(context, output, raw);
 }
 
+static uintptr_t setCEConfig(uintptr_t handle, const uint8_t *config,
+                             uintptr_t callback, uintptr_t callbackContext) {
+    if (!config || access(kFelicaGate, F_OK) != 0)
+        return originalSetCEConfig(handle, config, callback, callbackContext);
+    uint32_t type = 0;
+    memcpy(&type, config + 4, sizeof(type));
+    record("ce_original_type", type);
+    if (type != 2)
+        return originalSetCEConfig(handle, config, callback, callbackContext);
+
+    // The validated Comet CE union is at least 0x4a bytes. Type 4 consumes
+    // only offsets 4, 9..16, 0x16..0x1b and 0x1c..0x1d.
+    uint8_t patched[0x50] = {0};
+    const uint32_t felica = 4;
+    const uint8_t idm[8] = {0x02,0xfe,0x00,0x00,0x00,0x00,0x00,0x01};
+    const uint8_t pmmSuffix[6] = {0,0,0,0,0,0};
+    const uint8_t wildcardSystem[2] = {0xff,0xff};
+    memcpy(patched + 4, &felica, sizeof(felica));
+    memcpy(patched + 9, idm, sizeof(idm));
+    memcpy(patched + 0x16, pmmSuffix, sizeof(pmmSuffix));
+    memcpy(patched + 0x1c, wildcardSystem, sizeof(wildcardSystem));
+    record("ce_type_2_to_4", felica);
+    return originalSetCEConfig(handle, patched, callback, callbackContext);
+}
+
 __attribute__((constructor)) static void start(void) {
     @autoreleasepool {
-        if (![[NSProcessInfo processInfo].processName isEqualToString:@"nfcd"] || access(kGate, F_OK) != 0) return;
+        BOOL classicEnabled = access(kGate, F_OK) == 0;
+        BOOL felicaEnabled = access(kFelicaGate, F_OK) == 0;
+        if (![[NSProcessInfo processInfo].processName isEqualToString:@"nfcd"] || (!classicEnabled && !felicaEnabled)) return;
         void *exported = dlsym(RTLD_DEFAULT, "phLibNfc_RemoteDev_Transceive");
         Dl_info owner = {0};
         if (!exported || !dladdr(exported, &owner) || !owner.dli_fbase || !owner.dli_fname ||
@@ -120,10 +149,19 @@ __attribute__((constructor)) static void start(void) {
         void *mappingResponse = (uint8_t *)entry + 0x389d0;
         void *activation = (uint8_t *)entry + 0x1e214;
         MSHookFunction(activation, (void *)activationParser, (void **)&originalActivationParser);
-        MSHookFunction(mappingResponse, (void *)protoIfMapRsp, (void **)&originalProtoIfMapRsp);
-        MSHookFunction(sequence, (void *)configSequence, (void **)&originalConfigSequence);
-        MSHookFunction(target, (void *)configMapping, (void **)&originalConfigMapping);
-        record(originalConfigMapping && originalConfigSequence && originalActivationParser && originalProtoIfMapRsp ? "hooks_installed" : "hook_failed",
-               (unsigned long)target);
+        if (classicEnabled) {
+            MSHookFunction(mappingResponse, (void *)protoIfMapRsp, (void **)&originalProtoIfMapRsp);
+            MSHookFunction(sequence, (void *)configSequence, (void **)&originalConfigSequence);
+            MSHookFunction(target, (void *)configMapping, (void **)&originalConfigMapping);
+        }
+        if (felicaEnabled) {
+            void *setCE = dlsym(RTLD_DEFAULT, "phLibNfc_Mgt_SetCE_ConfigParams");
+            if (setCE) MSHookFunction(ptrauth_strip(setCE, ptrauth_key_function_pointer),
+                                      (void *)setCEConfig, (void **)&originalSetCEConfig);
+        }
+        BOOL ok = originalActivationParser &&
+            (!classicEnabled || (originalConfigMapping && originalConfigSequence && originalProtoIfMapRsp)) &&
+            (!felicaEnabled || originalSetCEConfig);
+        record(ok ? "hooks_installed" : "hook_failed", (unsigned long)target);
     }
 }

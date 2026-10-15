@@ -28,3 +28,11 @@ RF_DISCOVER_MAP response this is the controller status byte.
 It observes the raw activation parser before the existing mapper can reject a
 target and records interface, technology/mode, protocol, and discovery mode
 when either the protocol or discovery mode is `0x80`.
+
+Version `0.3.0` adds a separate opt-in Type-F Host probe. With only
+`/var/tmp/aime-felica-host-probe.enabled` present, it hooks the exported Comet
+CE configuration entry and changes an exact Type-2 Host configuration into a
+Type-4 configuration using synthetic NFCID2 `02FE000000000001` and wildcard
+system code. It records `ce_original_type` and `ce_type_2_to_4`. This probe is
+independent of the rejected Classic mapping experiment and does not enable the
+Classic gate.
