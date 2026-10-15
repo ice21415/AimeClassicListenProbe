@@ -113,7 +113,7 @@ static uintptr_t setCEConfig(uintptr_t handle, const uint8_t *config,
     uint32_t type = 0;
     memcpy(&type, config + 4, sizeof(type));
     record("ce_original_type", type);
-    if (type != 2)
+    if (type != 1 && type != 2)
         return originalSetCEConfig(handle, config, callback, callbackContext);
 
     // The validated Comet CE union is at least 0x4a bytes. Type 4 consumes
@@ -127,7 +127,7 @@ static uintptr_t setCEConfig(uintptr_t handle, const uint8_t *config,
     memcpy(patched + 9, idm, sizeof(idm));
     memcpy(patched + 0x16, pmmSuffix, sizeof(pmmSuffix));
     memcpy(patched + 0x1c, wildcardSystem, sizeof(wildcardSystem));
-    record("ce_type_2_to_4", felica);
+    record(type == 1 ? "ce_type_1_to_4" : "ce_type_2_to_4", felica);
     return originalSetCEConfig(handle, patched, callback, callbackContext);
 }
 
