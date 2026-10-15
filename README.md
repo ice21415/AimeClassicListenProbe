@@ -36,3 +36,6 @@ Type-4 configuration using synthetic NFCID2 `02FE000000000001` and wildcard
 system code. It records `ce_original_type` and `ce_type_2_to_4`. This probe is
 independent of the rejected Classic mapping experiment and does not enable the
 Classic gate.
+
+Version `0.3.1` also records the asynchronous Host CE configuration completion
+as `ce_config_result` (`0` means Comet accepted the configuration sequence).

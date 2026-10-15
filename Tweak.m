@@ -19,6 +19,7 @@ static uintptr_t (*originalConfigSequence)(uintptr_t, uintptr_t, uintptr_t);
 static uintptr_t (*originalActivationParser)(uintptr_t, uintptr_t, uintptr_t);
 static uintptr_t (*originalProtoIfMapRsp)(uintptr_t);
 static uintptr_t (*originalSetCEConfig)(uintptr_t, const uint8_t *, uintptr_t, uintptr_t);
+static uintptr_t (*originalSetCEConfigProc)(uintptr_t, uintptr_t);
 
 static void record(const char *event, unsigned long value) {
     int fd = open("/var/tmp/aime-classic-listen-probe.log",
@@ -130,6 +131,11 @@ static uintptr_t setCEConfig(uintptr_t handle, const uint8_t *config,
     return originalSetCEConfig(handle, patched, callback, callbackContext);
 }
 
+static uintptr_t setCEConfigProc(uintptr_t context, uintptr_t status) {
+    record("ce_config_result", status);
+    return originalSetCEConfigProc(context, status);
+}
+
 __attribute__((constructor)) static void start(void) {
     @autoreleasepool {
         BOOL classicEnabled = access(kGate, F_OK) == 0;
@@ -148,6 +154,7 @@ __attribute__((constructor)) static void start(void) {
         void *sequence = (uint8_t *)entry + 0x394ac;
         void *mappingResponse = (uint8_t *)entry + 0x389d0;
         void *activation = (uint8_t *)entry + 0x1e214;
+        void *ceConfigProc = (uint8_t *)entry - 0x2112c;
         MSHookFunction(activation, (void *)activationParser, (void **)&originalActivationParser);
         if (classicEnabled) {
             MSHookFunction(mappingResponse, (void *)protoIfMapRsp, (void **)&originalProtoIfMapRsp);
@@ -158,10 +165,11 @@ __attribute__((constructor)) static void start(void) {
             void *setCE = dlsym(RTLD_DEFAULT, "phLibNfc_Mgt_SetCE_ConfigParams");
             if (setCE) MSHookFunction(ptrauth_strip(setCE, ptrauth_key_function_pointer),
                                       (void *)setCEConfig, (void **)&originalSetCEConfig);
+            MSHookFunction(ceConfigProc, (void *)setCEConfigProc, (void **)&originalSetCEConfigProc);
         }
         BOOL ok = originalActivationParser &&
             (!classicEnabled || (originalConfigMapping && originalConfigSequence && originalProtoIfMapRsp)) &&
-            (!felicaEnabled || originalSetCEConfig);
+            (!felicaEnabled || (originalSetCEConfig && originalSetCEConfigProc));
         record(ok ? "hooks_installed" : "hook_failed", (unsigned long)target);
     }
 }
